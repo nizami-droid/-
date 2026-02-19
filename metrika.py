@@ -8,6 +8,7 @@ Reference: https://yandex.ru/support/metrica/data/hit-api.html
 """
 
 import logging
+import time
 import uuid
 
 import aiohttp
@@ -32,12 +33,14 @@ async def send_goal(
     required parameters:
       - wmode  : watch mode (6 = goal event)
       - v      : protocol version
-      - t      : hit type ("event")
+      - t      : hit type ("reachGoal")
       - e      : goal identifier (name of the goal as configured in Metrika)
-      - en     : event name (human-readable)
       - url    : page URL
       - title  : page title
       - rn     : random nonce (cache buster)
+
+    Also sends Cookie header with _ym_uid (Telegram user_id) so Metrika
+    can attribute the hit to a visitor instead of discarding it.
 
     Returns True on success, False otherwise.
     """
@@ -50,13 +53,20 @@ async def send_goal(
         "e": goal_name,
         "url": page_url,
         "title": page_title,
-        "uid": str(user_id),
         "rn": uuid.uuid4().hex,
+    }
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Cookie": f"_ym_uid={user_id}; _ym_d={int(time.time())}",
     }
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     logger.info(
                         "Goal '%s' sent to Metrika counter %s for user %s",
