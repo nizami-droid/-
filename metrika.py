@@ -7,6 +7,7 @@ server-side hit API endpoint.
 Reference: https://yandex.ru/support/metrica/data/hit-api.html
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -25,6 +26,8 @@ async def send_goal(
     *,
     page_url: str = "https://t.me/bot",
     page_title: str = "Telegram Bot",
+    max_attempts: int = 3,
+    retry_backoff: float = 0.5,
 ) -> bool:
     """
     Send a goal hit to Yandex.Metrika.
@@ -64,24 +67,48 @@ async def send_goal(
         "Cookie": f"_ym_uid={user_id}; _ym_d={int(time.time())}",
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status == 200:
-                    logger.info(
-                        "Goal '%s' sent to Metrika counter %s for user %s",
-                        goal_name,
-                        counter_id,
-                        user_id,
-                    )
-                    return True
-                else:
-                    logger.warning(
-                        "Metrika returned HTTP %s for user %s",
-                        resp.status,
-                        user_id,
-                    )
-                    return False
-    except aiohttp.ClientError as exc:
-        logger.error("Failed to send goal to Metrika: %s", exc)
-        return False
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            "Goal '%s' sent to Metrika counter %s for user %s",
+                            goal_name,
+                            counter_id,
+                            user_id,
+                        )
+                        return True
+
+                    if resp.status in {429} or resp.status >= 500:
+                        logger.warning(
+                            "Metrika returned HTTP %s for user %s (attempt %s/%s)",
+                            resp.status,
+                            user_id,
+                            attempt,
+                            max_attempts,
+                        )
+                    else:
+                        logger.warning(
+                            "Metrika returned HTTP %s for user %s",
+                            resp.status,
+                            user_id,
+                        )
+                        return False
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.error(
+                "Failed to send goal to Metrika (attempt %s/%s): %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+
+        if attempt < max_attempts:
+            await asyncio.sleep(retry_backoff * attempt)
+
+    return False

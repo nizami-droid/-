@@ -15,12 +15,13 @@ Repeated /start commands are silently ignored for metric purposes
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 import config
-from db import init_db, is_new_user, mark_user_seen
+from db import init_db, mark_user_seen
 from metrika import send_goal
 
 logging.basicConfig(
@@ -32,15 +33,16 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-@router.message(CommandStart())
+@router.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
 async def handle_start(message: Message) -> None:
+    if message.from_user is None:
+        logger.warning("Received /start without from_user; skipping")
+        return
+
     user_id = message.from_user.id
 
-    if await is_new_user(user_id):
-        # Mark first so that even if Metrika call fails we don't double-count
-        # if the user spams /start very quickly.
-        await mark_user_seen(user_id)
-
+    is_first_seen = await mark_user_seen(user_id)
+    if is_first_seen:
         success = await send_goal(
             counter_id=config.METRIKA_COUNTER_ID,
             goal_name=config.METRIKA_GOAL_NAME,
